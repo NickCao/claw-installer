@@ -8,6 +8,7 @@ interface Props {
 
 interface ServerDefaults {
   hasAnthropicKey: boolean;
+  hasOpenaiKey: boolean;
   modelEndpoint: string;
   prefix: string;
   image: string;
@@ -50,6 +51,8 @@ export default function DeployForm({ onDeployStarted }: Props) {
     agentDisplayName: "",
     image: "",
     anthropicApiKey: "",
+    openaiApiKey: "",
+    agentModel: "",
     modelEndpoint: "",
     port: "18789",
     // Vertex AI
@@ -60,6 +63,8 @@ export default function DeployForm({ onDeployStarted }: Props) {
     // SSH fields
     sshHost: "",
     sshUser: "",
+    // Agent provisioning
+    agentSourceDir: "",
   });
 
   // Fetch server defaults (detected env vars)
@@ -102,11 +107,13 @@ export default function DeployForm({ onDeployStarted }: Props) {
       agentDisplayName: vars.OPENCLAW_DISPLAY_NAME || prev.agentDisplayName,
       image: vars.OPENCLAW_IMAGE || prev.image,
       port: vars.OPENCLAW_PORT || prev.port,
+      agentModel: vars.AGENT_MODEL || prev.agentModel,
       modelEndpoint: vars.MODEL_ENDPOINT || prev.modelEndpoint,
       vertexEnabled: vars.VERTEX_ENABLED === "true" || prev.vertexEnabled,
       vertexProvider: (vars.VERTEX_PROVIDER as "google" | "anthropic") || prev.vertexProvider,
       googleCloudProject: vars.GOOGLE_CLOUD_PROJECT || prev.googleCloudProject,
       googleCloudLocation: vars.GOOGLE_CLOUD_LOCATION || prev.googleCloudLocation,
+      agentSourceDir: vars.AGENT_SOURCE_DIR || prev.agentSourceDir,
     }));
   };
 
@@ -139,6 +146,8 @@ export default function DeployForm({ onDeployStarted }: Props) {
         agentDisplayName: config.agentDisplayName || config.agentName,
         image: config.image || undefined,
         anthropicApiKey: config.anthropicApiKey || undefined,
+        openaiApiKey: config.openaiApiKey || undefined,
+        agentModel: config.agentModel || undefined,
         modelEndpoint: config.modelEndpoint || undefined,
         port: parseInt(config.port, 10) || 18789,
         vertexEnabled: config.vertexEnabled || undefined,
@@ -147,6 +156,7 @@ export default function DeployForm({ onDeployStarted }: Props) {
         googleCloudLocation: config.vertexEnabled ? config.googleCloudLocation : undefined,
         sshHost: config.sshHost || undefined,
         sshUser: config.sshUser || undefined,
+        agentSourceDir: config.agentSourceDir || undefined,
       };
 
       const res = await fetch("/api/deploy", {
@@ -290,6 +300,22 @@ export default function DeployForm({ onDeployStarted }: Props) {
 
         {mode === "local" && (
           <div className="form-group">
+            <label>Agent Source Directory</label>
+            <input
+              type="text"
+              placeholder="/path/to/agents-dir (optional)"
+              value={config.agentSourceDir}
+              onChange={(e) => update("agentSourceDir", e.target.value)}
+            />
+            <div className="hint">
+              Host directory with <code>agents/</code> and <code>skills/</code> subdirs to provision into the workspace.
+              Defaults to <code>~/.openclaw-installer/agents/</code> if it exists.
+            </div>
+          </div>
+        )}
+
+        {mode === "local" && (
+          <div className="form-group">
             <label>Port</label>
             <input
               type="text"
@@ -342,6 +368,42 @@ export default function DeployForm({ onDeployStarted }: Props) {
         </div>
 
         <div className="form-group">
+          <label>OpenAI API Key</label>
+          <input
+            type="password"
+            placeholder={defaults?.hasOpenaiKey ? "(using key from environment)" : "sk-..."}
+            value={config.openaiApiKey}
+            onChange={(e) => update("openaiApiKey", e.target.value)}
+          />
+          <div className="hint">
+            {defaults?.hasOpenaiKey
+              ? "Detected OPENAI_API_KEY from server environment — leave blank to use it"
+              : "Optional — for GPT-5, and other OpenAI models"}
+          </div>
+        </div>
+
+        <div className="form-group">
+          <label>Model</label>
+          <input
+            type="text"
+            placeholder={
+              config.vertexEnabled
+                ? config.vertexProvider === "anthropic"
+                  ? "anthropic-vertex/claude-sonnet-4-6"
+                  : "google-vertex/gemini-2.5-pro"
+                : config.openaiApiKey
+                  ? "openai/gpt-5"
+                  : "claude-sonnet-4-6"
+            }
+            value={config.agentModel}
+            onChange={(e) => update("agentModel", e.target.value)}
+          />
+          <div className="hint">
+            Model ID for the agent (leave blank for auto-detect). Examples: claude-sonnet-4-6, claude-opus-4-6, openai/gpt-5, openai/gpt-5.3
+          </div>
+        </div>
+
+        <div className="form-group">
           <label>Model Endpoint</label>
           <input
             type="text"
@@ -350,7 +412,7 @@ export default function DeployForm({ onDeployStarted }: Props) {
             onChange={(e) => update("modelEndpoint", e.target.value)}
           />
           <div className="hint">
-            OpenAI-compatible endpoint (leave blank for Anthropic API or Vertex)
+            OpenAI-compatible endpoint for self-hosted models (leave blank for Anthropic/OpenAI/Vertex)
           </div>
         </div>
 

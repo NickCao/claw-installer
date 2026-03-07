@@ -8,6 +8,8 @@ export interface DeployConfig {
   prefix: string;
   // Model provider (all optional — without them, agents use in-cluster model)
   anthropicApiKey?: string;
+  openaiApiKey?: string;
+  agentModel?: string;
   modelEndpoint?: string;
   // Vertex AI
   vertexEnabled?: boolean;
@@ -18,6 +20,7 @@ export interface DeployConfig {
   containerRuntime?: "podman" | "docker";
   image?: string;
   port?: number;
+  agentSourceDir?: string; // Host directory with agents/ and skills/ to provision
   // Kubernetes mode
   namespace?: string;
   withA2a?: boolean;

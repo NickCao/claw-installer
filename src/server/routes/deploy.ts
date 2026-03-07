@@ -34,6 +34,9 @@ router.post("/", async (req, res) => {
   if (!config.anthropicApiKey && process.env.ANTHROPIC_API_KEY) {
     config.anthropicApiKey = process.env.ANTHROPIC_API_KEY;
   }
+  if (!config.openaiApiKey && process.env.OPENAI_API_KEY) {
+    config.openaiApiKey = process.env.OPENAI_API_KEY;
+  }
   if (!config.modelEndpoint && process.env.MODEL_ENDPOINT) {
     config.modelEndpoint = process.env.MODEL_ENDPOINT;
   }

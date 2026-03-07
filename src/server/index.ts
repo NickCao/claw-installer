@@ -30,6 +30,7 @@ app.get("/api/health", async (_req, res) => {
     version: "0.1.0",
     defaults: {
       hasAnthropicKey: !!process.env.ANTHROPIC_API_KEY,
+      hasOpenaiKey: !!process.env.OPENAI_API_KEY,
       modelEndpoint: process.env.MODEL_ENDPOINT || "",
       prefix: process.env.OPENCLAW_PREFIX || "",
       image: process.env.OPENCLAW_IMAGE || "",
