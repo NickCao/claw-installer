@@ -15,7 +15,7 @@ interface Instance {
   error?: string;
 }
 
-type ExpandedPanel = "token" | "command" | null;
+type ExpandedPanel = "token" | "command" | "logs" | null;
 
 export default function InstanceList() {
   const [instances, setInstances] = useState<Instance[]>([]);
@@ -80,11 +80,11 @@ export default function InstanceList() {
       return;
     }
 
-    const endpoint = panel === "token" ? "token" : "command";
+    const endpoint = panel === "token" ? "token" : panel === "logs" ? "logs" : "command";
     try {
       const res = await fetch(`/api/instances/${id}/${endpoint}`);
       const data = await res.json();
-      const value = panel === "token" ? data.token : data.command;
+      const value = panel === "token" ? data.token : panel === "logs" ? data.logs : data.command;
       if (value) {
         setPanelData((prev) => ({ ...prev, [`${id}-${panel}`]: value }));
         setExpanded((prev) => ({ ...prev, [id]: panel }));
@@ -165,6 +165,12 @@ export default function InstanceList() {
                       onClick={() => togglePanel(inst.id, "command")}
                     >
                       {activePanel === "command" ? "Hide" : "Command"}
+                    </button>
+                    <button
+                      className="btn btn-ghost"
+                      onClick={() => togglePanel(inst.id, "logs")}
+                    >
+                      {activePanel === "logs" ? "Hide" : "Logs"}
                     </button>
                   </>
                 )}

@@ -40,6 +40,14 @@ router.post("/", async (req, res) => {
   if (!config.modelEndpoint && process.env.MODEL_ENDPOINT) {
     config.modelEndpoint = process.env.MODEL_ENDPOINT;
   }
+  if (config.telegramEnabled) {
+    if (!config.telegramBotToken && process.env.TELEGRAM_BOT_TOKEN) {
+      config.telegramBotToken = process.env.TELEGRAM_BOT_TOKEN;
+    }
+    if (!config.telegramAllowFrom && process.env.TELEGRAM_ALLOW_FROM) {
+      config.telegramAllowFrom = process.env.TELEGRAM_ALLOW_FROM;
+    }
+  }
   if (config.vertexEnabled === undefined && process.env.VERTEX_ENABLED === "true") {
     config.vertexEnabled = true;
     config.vertexProvider = (process.env.VERTEX_PROVIDER as "google" | "anthropic") || "google";

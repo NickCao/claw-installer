@@ -9,6 +9,8 @@ interface Props {
 interface ServerDefaults {
   hasAnthropicKey: boolean;
   hasOpenaiKey: boolean;
+  hasTelegramToken: boolean;
+  telegramAllowFrom: string;
   modelEndpoint: string;
   prefix: string;
   image: string;
@@ -19,7 +21,7 @@ interface SavedConfig {
   vars: Record<string, string>;
 }
 
-const MODES = [
+const MODES: Array<{ id: Mode; icon: string; title: string; desc: string; disabled?: boolean }> = [
   {
     id: "local" as const,
     icon: "💻",
@@ -29,14 +31,16 @@ const MODES = [
   {
     id: "kubernetes" as const,
     icon: "☸️",
-    title: "Kubernetes / OpenShift",
+    title: "🚧 Kubernetes / OpenShift",
     desc: "Deploy to a cluster (coming soon)",
+    disabled: true,
   },
   {
     id: "ssh" as const,
     icon: "🖥️",
-    title: "Remote Host",
+    title: "🚧 Remote Host",
     desc: "Deploy via SSH to a Linux machine (coming soon)",
+    disabled: true,
   },
 ];
 
@@ -65,6 +69,10 @@ export default function DeployForm({ onDeployStarted }: Props) {
     sshUser: "",
     // Agent provisioning
     agentSourceDir: "",
+    // Telegram
+    telegramEnabled: false,
+    telegramBotToken: "",
+    telegramAllowFrom: "",
   });
 
   // Fetch server defaults (detected env vars)
@@ -114,6 +122,8 @@ export default function DeployForm({ onDeployStarted }: Props) {
       googleCloudProject: vars.GOOGLE_CLOUD_PROJECT || prev.googleCloudProject,
       googleCloudLocation: vars.GOOGLE_CLOUD_LOCATION || prev.googleCloudLocation,
       agentSourceDir: vars.AGENT_SOURCE_DIR || prev.agentSourceDir,
+      telegramBotToken: vars.TELEGRAM_BOT_TOKEN || prev.telegramBotToken,
+      telegramAllowFrom: vars.TELEGRAM_ALLOW_FROM || prev.telegramAllowFrom,
     }));
   };
 
@@ -157,6 +167,9 @@ export default function DeployForm({ onDeployStarted }: Props) {
         sshHost: config.sshHost || undefined,
         sshUser: config.sshUser || undefined,
         agentSourceDir: config.agentSourceDir || undefined,
+        telegramEnabled: config.telegramEnabled || undefined,
+        telegramBotToken: config.telegramEnabled ? config.telegramBotToken || undefined : undefined,
+        telegramAllowFrom: config.telegramEnabled ? config.telegramAllowFrom || undefined : undefined,
       };
 
       const res = await fetch("/api/deploy", {
@@ -206,8 +219,9 @@ export default function DeployForm({ onDeployStarted }: Props) {
         {MODES.map((m) => (
           <div
             key={m.id}
-            className={`mode-card ${mode === m.id ? "selected" : ""}`}
-            onClick={() => setMode(m.id)}
+            className={`mode-card ${mode === m.id ? "selected" : ""} ${m.disabled ? "disabled" : ""}`}
+            onClick={() => !m.disabled && setMode(m.id)}
+            style={m.disabled ? { opacity: 0.5, cursor: "not-allowed" } : undefined}
           >
             <div className="mode-icon">{m.icon}</div>
             <div className="mode-title">{m.title}</div>
@@ -474,6 +488,61 @@ export default function DeployForm({ onDeployStarted }: Props) {
                   value={config.googleCloudLocation}
                   onChange={(e) => update("googleCloudLocation", e.target.value)}
                 />
+              </div>
+            </div>
+          </>
+        )}
+
+        <h3 style={{ marginTop: "1.5rem" }}>Channels</h3>
+
+        <div className="form-group">
+          <label style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+            <input
+              type="checkbox"
+              checked={config.telegramEnabled}
+              onChange={(e) =>
+                setConfig((prev) => ({ ...prev, telegramEnabled: e.target.checked }))
+              }
+              style={{ width: "auto" }}
+            />
+            Connect Telegram Bot
+          </label>
+          <div className="hint">
+            {defaults?.hasTelegramToken
+              ? "Telegram bot token detected from environment"
+              : <>Create a bot via <a href="https://t.me/BotFather" target="_blank" rel="noreferrer">@BotFather</a> on Telegram</>}
+          </div>
+        </div>
+
+        {config.telegramEnabled && (
+          <>
+            <div className="form-group">
+              <label>Telegram Bot Token</label>
+              <input
+                type="password"
+                placeholder={defaults?.hasTelegramToken ? "(using token from environment)" : "123456:ABC-DEF..."}
+                value={config.telegramBotToken}
+                onChange={(e) => update("telegramBotToken", e.target.value)}
+              />
+              <div className="hint">
+                {defaults?.hasTelegramToken
+                  ? "Leave blank to use token from environment"
+                  : "Bot token from @BotFather"}
+              </div>
+            </div>
+
+            <div className="form-group">
+              <label>Allowed Telegram User IDs</label>
+              <input
+                type="password"
+                placeholder={defaults?.telegramAllowFrom ? "(using IDs from environment)" : "123456789, 987654321"}
+                value={config.telegramAllowFrom}
+                onChange={(e) => update("telegramAllowFrom", e.target.value)}
+              />
+              <div className="hint">
+                {defaults?.telegramAllowFrom
+                  ? "Leave blank to use IDs from environment"
+                  : <>Comma-separated user IDs. Find yours via <a href="https://t.me/userinfobot" target="_blank" rel="noreferrer">@userinfobot</a></>}
               </div>
             </div>
           </>

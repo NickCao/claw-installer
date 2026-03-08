@@ -31,6 +31,8 @@ app.get("/api/health", async (_req, res) => {
     defaults: {
       hasAnthropicKey: !!process.env.ANTHROPIC_API_KEY,
       hasOpenaiKey: !!process.env.OPENAI_API_KEY,
+      hasTelegramToken: !!process.env.TELEGRAM_BOT_TOKEN,
+      telegramAllowFrom: process.env.TELEGRAM_ALLOW_FROM || "",
       modelEndpoint: process.env.MODEL_ENDPOINT || "",
       prefix: process.env.OPENCLAW_PREFIX || "",
       image: process.env.OPENCLAW_IMAGE || "",

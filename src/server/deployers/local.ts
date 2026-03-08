@@ -1,6 +1,6 @@
 import { spawn, execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { existsSync } from "node:fs";
@@ -51,7 +51,7 @@ function deriveModel(config: DeployConfig): string {
 function buildOpenClawConfig(config: DeployConfig): string {
   const agentId = `${config.prefix}_${config.agentName}`;
   const model = deriveModel(config);
-  return JSON.stringify({
+  const ocConfig: Record<string, unknown> = {
     gateway: {
       mode: "local",
       controlUi: {
@@ -84,7 +84,23 @@ function buildOpenClawConfig(config: DeployConfig): string {
       },
     },
     cron: { enabled: true },
-  });
+  };
+
+  // Add Telegram channel config if enabled
+  if (config.telegramBotToken && config.telegramAllowFrom) {
+    const allowFrom = config.telegramAllowFrom
+      .split(",")
+      .map((id) => parseInt(id.trim(), 10))
+      .filter((id) => !isNaN(id));
+    ocConfig.channels = {
+      telegram: {
+        dmPolicy: "allowlist",
+        allowFrom,
+      },
+    };
+  }
+
+  return JSON.stringify(ocConfig);
 }
 
 /**
@@ -176,7 +192,7 @@ function containerName(config: DeployConfig): string {
 }
 
 function volumeName(config: DeployConfig): string {
-  return `openclaw-${config.prefix}-data`;
+  return `openclaw-${config.prefix}-${config.agentName}-data`.toLowerCase();
 }
 
 function runCommand(
@@ -185,7 +201,13 @@ function runCommand(
   log: LogCallback,
 ): Promise<{ code: number }> {
   return new Promise((resolve, reject) => {
-    log(`$ ${cmd} ${args.join(" ")}`);
+    // Redact secrets from logged command
+    const redacted = args.map((a, i) =>
+      args[i - 1] === "-e" && /^(ANTHROPIC_API_KEY|OPENAI_API_KEY|TELEGRAM_BOT_TOKEN)=/.test(a)
+        ? a.replace(/=.*/, "=***")
+        : a
+    );
+    log(`$ ${cmd} ${redacted.join(" ")}`);
     const proc = spawn(cmd, args);
     proc.stdout.on("data", (data: Buffer) => {
       for (const line of data.toString().split("\n")) {
@@ -211,7 +233,7 @@ function buildRunArgs(config: DeployConfig, name: string, port: number): string[
   const runArgs = [
     "run",
     "-d",
-    // "--rm",  // temporarily disabled for debugging crashes
+    "--rm",  // comment out to keep containers after stop (for debugging)
     "--name",
     name,
     "-p", `${port}:18789`,
@@ -243,6 +265,9 @@ function buildRunArgs(config: DeployConfig, name: string, port: number): string[
     if (config.googleCloudLocation) {
       env.GOOGLE_CLOUD_LOCATION = config.googleCloudLocation;
     }
+  }
+  if (config.telegramBotToken) {
+    env.TELEGRAM_BOT_TOKEN = config.telegramBotToken;
   }
 
   for (const [key, val] of Object.entries(env)) {
@@ -325,12 +350,14 @@ export class LocalDeployer implements Deployer {
       "-v", `${vol}:/home/node/.openclaw`,
     ];
 
-    // Mount agent source directory — explicit config, or default ~/.openclaw-installer/agents/
+    // Mount agent source directory if explicitly provided, or auto-detect on host.
+    // Auto-detect only works when running directly (not containerized), because
+    // the path must be valid on the container host, not inside the installer container.
+    const isContainerized = existsSync("/.dockerenv") || existsSync("/run/.containerenv");
     const agentSourceDir = config.agentSourceDir
-      || (() => {
-        const defaultDir = join(homedir(), ".openclaw-installer", "agents");
-        return existsSync(defaultDir) ? defaultDir : null;
-      })();
+      || (!isContainerized && existsSync(join(homedir(), ".openclaw-installer", "agents"))
+        ? join(homedir(), ".openclaw-installer", "agents")
+        : null);
 
     if (agentSourceDir) {
       initArgs.push("-v", `${agentSourceDir}:/tmp/agent-source:ro`);
@@ -339,19 +366,26 @@ export class LocalDeployer implements Deployer {
 
     initArgs.push(image, "sh", "-c", initScript);
 
-    await runCommand(runtime, initArgs, log);
+    const initResult = await runCommand(runtime, initArgs, log);
+    if (initResult.code !== 0) {
+      throw new Error("Failed to initialize config volume");
+    }
     log(`Default agent provisioned: ${config.agentDisplayName || config.agentName} (${agentId})`);
 
     // Save agent files to host so user can edit and re-deploy
-    const hostAgentsDir = join(homedir(), ".openclaw-installer", "agents", `workspace-${agentId}`);
-    await mkdir(hostAgentsDir, { recursive: true });
-    const hostAgentsMd = join(hostAgentsDir, "AGENTS.md");
-    const hostAgentJson = join(hostAgentsDir, "agent.json");
-    // Only write if not already customized by the user
-    if (!existsSync(hostAgentsMd)) {
-      await writeFile(hostAgentsMd, agentsMd);
-      await writeFile(hostAgentJson, agentJson);
-      log(`Agent files saved to ${hostAgentsDir} (edit and re-deploy to customize)`);
+    try {
+      const hostAgentsDir = join(homedir(), ".openclaw-installer", "agents", `workspace-${agentId}`);
+      await mkdir(hostAgentsDir, { recursive: true });
+      const hostAgentsMd = join(hostAgentsDir, "AGENTS.md");
+      const hostAgentJson = join(hostAgentsDir, "agent.json");
+      // Only write if not already customized by the user
+      if (!existsSync(hostAgentsMd)) {
+        await writeFile(hostAgentsMd, agentsMd);
+        await writeFile(hostAgentJson, agentJson);
+        log(`Agent files saved to ${hostAgentsDir} (edit and re-deploy to customize)`);
+      }
+    } catch {
+      log("Could not save agent files to host (directory may not be writable)");
     }
 
     const runArgs = buildRunArgs(config, name, port);
@@ -383,8 +417,9 @@ export class LocalDeployer implements Deployer {
     const name = result.containerId ?? containerName(result.config);
     const port = result.config.port ?? DEFAULT_PORT;
 
-    // --rm means container was removed on stop, so we re-create it
-    // The volume still has all the state
+    // Remove old container if it exists (stop may not have fully cleaned up)
+    await removeContainer(runtime, name);
+
     log(`Starting OpenClaw container: ${name}`);
     const runArgs = buildRunArgs(result.config, name, port);
     const run = await runCommand(runtime, runArgs, log);
@@ -429,7 +464,12 @@ export class LocalDeployer implements Deployer {
     log: LogCallback,
   ): Promise<void> {
     const instanceDir = join(homedir(), ".openclaw-installer", name);
-    await mkdir(instanceDir, { recursive: true });
+    try {
+      await mkdir(instanceDir, { recursive: true });
+    } catch {
+      log("Could not create instance directory (host may not be writable)");
+      return;
+    }
 
     // Wait for gateway to generate token on first start
     await new Promise((r) => setTimeout(r, 3000));
@@ -469,12 +509,10 @@ export class LocalDeployer implements Deployer {
       ];
 
       if (config.anthropicApiKey) {
-        lines.push(`# ANTHROPIC_API_KEY is set (value redacted)`);
-        lines.push(`# ANTHROPIC_API_KEY=***`);
+        lines.push(`ANTHROPIC_API_KEY=${config.anthropicApiKey}`);
       }
       if (config.openaiApiKey) {
-        lines.push(`# OPENAI_API_KEY is set (value redacted)`);
-        lines.push(`# OPENAI_API_KEY=***`);
+        lines.push(`OPENAI_API_KEY=${config.openaiApiKey}`);
       }
       if (config.agentModel) {
         lines.push(`AGENT_MODEL=${config.agentModel}`);
@@ -494,6 +532,12 @@ export class LocalDeployer implements Deployer {
       }
       if (config.agentSourceDir) {
         lines.push(`AGENT_SOURCE_DIR=${config.agentSourceDir}`);
+      }
+      if (config.telegramBotToken) {
+        lines.push(`TELEGRAM_BOT_TOKEN=${config.telegramBotToken}`);
+      }
+      if (config.telegramAllowFrom) {
+        lines.push(`TELEGRAM_ALLOW_FROM=${config.telegramAllowFrom}`);
       }
 
       const envPath = join(instanceDir, ".env");

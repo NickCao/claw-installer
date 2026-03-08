@@ -16,6 +16,10 @@ export interface DeployConfig {
   vertexProvider?: "google" | "anthropic"; // google = Gemini, anthropic = Claude via Vertex
   googleCloudProject?: string;
   googleCloudLocation?: string;
+  // Telegram channel
+  telegramEnabled?: boolean;
+  telegramBotToken?: string;
+  telegramAllowFrom?: string; // comma-separated user IDs
   // Local mode
   containerRuntime?: "podman" | "docker";
   image?: string;

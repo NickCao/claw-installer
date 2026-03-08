@@ -77,7 +77,8 @@ export async function removeVolume(
 
 export interface DiscoveredVolume {
   name: string;
-  prefix: string;
+  /** The container name this volume belongs to (openclaw-<prefix>-<agent>) */
+  containerName: string;
 }
 
 /**
@@ -100,8 +101,8 @@ export async function discoverVolumes(
       .filter((name) => name.match(/^openclaw-.+-data$/))
       .map((name) => ({
         name,
-        // openclaw-sallyom-data -> sallyom
-        prefix: name.replace(/^openclaw-/, "").replace(/-data$/, ""),
+        // openclaw-sally-lynx-data -> openclaw-sally-lynx
+        containerName: name.replace(/-data$/, ""),
       }));
   } catch {
     return [];

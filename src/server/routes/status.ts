@@ -1,4 +1,7 @@
 import { Router } from "express";
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
+import { homedir } from "node:os";
 import {
   discoverContainers,
   discoverVolumes,
@@ -51,25 +54,37 @@ router.get("/", async (_req, res) => {
   const instances: DeployResult[] = containers.map(containerToInstance);
 
   // Find volumes that don't have a running container — these are "stopped" instances
-  const runningPrefixes = new Set(
-    instances.map((i) => i.config.prefix),
+  const runningContainerNames = new Set(
+    instances.map((i) => i.containerId),
   );
 
   for (const vol of volumes) {
-    if (runningPrefixes.has(vol.prefix)) continue;
+    if (runningContainerNames.has(vol.containerName)) continue;
+
+    // Read saved config to reconstruct the full deploy config
+    const savedVars = await readSavedConfig(vol.containerName);
+    const agentName = savedVars.OPENCLAW_AGENT_NAME || vol.containerName;
+    const displayName = savedVars.OPENCLAW_DISPLAY_NAME || agentName;
+    const prefix = savedVars.OPENCLAW_PREFIX || vol.containerName.replace(/^openclaw-/, "");
 
     instances.push({
-      id: `openclaw-${vol.prefix}`,
+      id: vol.containerName,
       mode: "local",
       status: "stopped",
       config: {
         mode: "local",
-        prefix: vol.prefix,
-        agentName: vol.prefix,
-        agentDisplayName: vol.prefix.charAt(0).toUpperCase() + vol.prefix.slice(1),
+        prefix,
+        agentName,
+        agentDisplayName: displayName.charAt(0).toUpperCase() + displayName.slice(1),
+        image: savedVars.OPENCLAW_IMAGE || undefined,
+        port: savedVars.OPENCLAW_PORT ? parseInt(savedVars.OPENCLAW_PORT, 10) : undefined,
+        anthropicApiKey: savedVars.ANTHROPIC_API_KEY || undefined,
+        openaiApiKey: savedVars.OPENAI_API_KEY || undefined,
+        telegramBotToken: savedVars.TELEGRAM_BOT_TOKEN || undefined,
+        telegramAllowFrom: savedVars.TELEGRAM_ALLOW_FROM || undefined,
       },
       startedAt: "",
-      containerId: `openclaw-${vol.prefix}`,
+      containerId: vol.containerName,
     });
   }
 
@@ -88,18 +103,9 @@ router.get("/:id", async (req, res) => {
   const c = containers.find((c) => c.name === req.params.id);
   if (!c) {
     // Check if there's a volume for it (stopped instance)
-    const volumes = await discoverVolumes(runtime);
-    const prefix = req.params.id.replace(/^openclaw-/, "");
-    const vol = volumes.find((v) => v.prefix === prefix);
-    if (vol) {
-      res.json({
-        id: req.params.id,
-        mode: "local",
-        status: "stopped",
-        config: { mode: "local", prefix: vol.prefix, agentName: vol.prefix, agentDisplayName: vol.prefix },
-        startedAt: "",
-        containerId: req.params.id,
-      });
+    const instance = await findInstance(req.params.id);
+    if (instance) {
+      res.json(instance);
       return;
     }
     res.status(404).json({ error: "Instance not found" });
@@ -277,6 +283,35 @@ router.get("/:id/command", async (req, res) => {
   }
 });
 
+// Get container logs (last 50 lines)
+router.get("/:id/logs", async (req, res) => {
+  const runtime = await detectRuntime();
+  if (!runtime) {
+    res.status(500).json({ error: "No container runtime" });
+    return;
+  }
+
+  const containers = await discoverContainers(runtime);
+  const c = containers.find((c) => c.name === req.params.id);
+  if (!c || c.status !== "running") {
+    res.status(400).json({ error: "Instance must be running to read logs" });
+    return;
+  }
+
+  try {
+    const { execFile } = await import("node:child_process");
+    const { promisify } = await import("node:util");
+    const execFileAsync = promisify(execFile);
+    const { stdout, stderr } = await execFileAsync(runtime, [
+      "logs", "--tail", "50", req.params.id,
+    ]);
+    res.json({ logs: (stdout + stderr).trim() });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    res.status(500).json({ error: message });
+  }
+});
+
 // Delete data (remove volume — the nuclear option)
 router.delete("/:id", async (req, res) => {
   const instance = await findInstance(req.params.id);
@@ -290,6 +325,27 @@ router.delete("/:id", async (req, res) => {
   res.json({ status: "deleted" });
 });
 
+/**
+ * Read saved .env file from ~/.openclaw-installer/<dir>/.env
+ * to reconstruct deploy config for stopped instances.
+ */
+async function readSavedConfig(containerName: string): Promise<Record<string, string>> {
+  const vars: Record<string, string> = {};
+  try {
+    const envPath = join(homedir(), ".openclaw-installer", containerName, ".env");
+    const content = await readFile(envPath, "utf8");
+    for (const line of content.split("\n")) {
+      if (line.startsWith("#") || !line.includes("=")) continue;
+      const [key, ...rest] = line.split("=");
+      vars[key.trim()] = rest.join("=").trim();
+    }
+  } catch {
+    // no saved config
+  }
+  return vars;
+}
+
+
 // Helper: find instance by container name or volume
 async function findInstance(name: string): Promise<DeployResult | null> {
   const runtime = await detectRuntime();
@@ -300,21 +356,32 @@ async function findInstance(name: string): Promise<DeployResult | null> {
   const c = containers.find((c) => c.name === name);
   if (c) return containerToInstance(c);
 
-  // Check volumes (stopped instances)
+  // Check volumes (stopped instances) — volume name matches container name
   const volumes = await discoverVolumes(runtime);
-  const prefix = name.replace(/^openclaw-/, "");
-  const vol = volumes.find((v) => v.prefix === prefix);
+  const vol = volumes.find((v) => v.containerName === name);
   if (vol) {
+    const savedVars = await readSavedConfig(name);
+    const prefix = savedVars.OPENCLAW_PREFIX || name.replace(/^openclaw-/, "");
+    const agentName = savedVars.OPENCLAW_AGENT_NAME || prefix;
+
     return {
       id: name,
       mode: "local",
       status: "stopped",
       config: {
         mode: "local",
-        prefix: vol.prefix,
-        agentName: vol.prefix,
-        agentDisplayName: vol.prefix,
+        prefix,
+        agentName,
+        agentDisplayName: savedVars.OPENCLAW_DISPLAY_NAME || agentName,
         containerRuntime: runtime,
+        image: savedVars.OPENCLAW_IMAGE || undefined,
+        port: savedVars.OPENCLAW_PORT ? parseInt(savedVars.OPENCLAW_PORT, 10) : undefined,
+        anthropicApiKey: savedVars.ANTHROPIC_API_KEY || undefined,
+        openaiApiKey: savedVars.OPENAI_API_KEY || undefined,
+        agentModel: savedVars.AGENT_MODEL || undefined,
+        modelEndpoint: savedVars.MODEL_ENDPOINT || undefined,
+        telegramBotToken: savedVars.TELEGRAM_BOT_TOKEN || undefined,
+        telegramAllowFrom: savedVars.TELEGRAM_ALLOW_FROM || undefined,
       },
       startedAt: "",
       containerId: name,
