@@ -51,7 +51,7 @@ async function oauthConfigSecret(ns: string): Promise<k8s.V1Secret> {
     const tokenRequest: k8s.AuthenticationV1TokenRequest = {
       apiVersion: "authentication.k8s.io/v1",
       kind: "TokenRequest",
-      spec: { expirationSeconds: 365 * 24 * 3600 }, // 1 year
+      spec: { audiences: [], expirationSeconds: 365 * 24 * 3600 }, // 1 year
     };
     const result = await core.createNamespacedServiceAccountToken({
       name: "openclaw-oauth-proxy",
